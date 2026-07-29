@@ -1,0 +1,111 @@
+
+
+[36m╔══════════════════════════════════════════════════════════════════╗[0m
+[36m║[0m[1m[33m           ARCHITECT PLATFORM - 25-STEP STARTUP SEQUENCE          [0m[36m║[0m
+[36m╚══════════════════════════════════════════════════════════════════╝[0m
+
+[35m[1m▸ PHASE 1:[0m[37m Core System Initialization[0m
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 1/25[0m[2m: [0m[36mValidate Parameters[0m
+[2m────────────────────────────────────────[0m
+  [32m✓ SUCCESS[0m[2m (0ms)[0m[2m → [0mConfig: config/default_config.json, Date: 20260520
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 2/25[0m[2m: [0m[36mLoad Configuration[0m
+[2m────────────────────────────────────────[0m
+  [32m✓ SUCCESS[0m[2m (1ms)[0m[2m → [0mLoaded config/default_config.json (+ credentials.local.json / external_feed.local.json if present)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 3/25[0m[2m: [0m[36mInitialize Logger[0m
+[2m────────────────────────────────────────[0m
+  [32m✓ SUCCESS[0m[2m (2ms)[0m[2m → [0mLog directory: logs/20260520
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 4/25[0m[2m: [0m[36mInitialize Event Manager[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 4/25: Initialize Event Manager - STARTING
+  [32m✓ SUCCESS[0m[2m (0ms)[0m[2m → [0mEvent queue ready
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 4/25: Initialize Event Manager - SUCCESS (0ms)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 5/25[0m[2m: [0m[36mInitialize Order Manager[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 5/25: Initialize Order Manager - STARTING
+  [32m✓ SUCCESS[0m[2m (0ms)[0m[2m → [0mOrder tracking ready
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 5/25: Initialize Order Manager - SUCCESS (0ms)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 6/25[0m[2m: [0m[36mInitialize User Manager[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 6/25: Initialize User Manager - STARTING
+  [32m✓ SUCCESS[0m[2m (0ms)[0m[2m → [0mSession management ready
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 6/25: Initialize User Manager - SUCCESS (0ms)
+
+[35m[1m▸ PHASE 2:[0m[37m API & Connectivity[0m
+[2026-05-20 21:04:15.796] [info] [2025898] >>> PHASE 2: API & Connectivity
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 7/25[0m[2m: [0m[36mInitialize REST Client[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.796] [info] [2025898] STEP 7/25: Initialize REST Client - STARTING
+[CURL_MULTI] init: pool=8 share=on multi=on
+  [32m✓ SUCCESS[0m[2m (14ms)[0m[2m → [0mEndpoint: https://gateway.architect.exchange/api
+[2026-05-20 21:04:15.811] [info] [2025898] STEP 7/25: Initialize REST Client - SUCCESS (14ms)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 8/25[0m[2m: [0m[36mInitialize WebSocket Client[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.811] [info] [2025898] STEP 8/25: Initialize WebSocket Client - STARTING
+  [32m✓ SUCCESS[0m[2m (0ms)[0m[2m → [0mEndpoint: wss://gateway.architect.exchange/orders/ws
+[2026-05-20 21:04:15.811] [info] [2025898] STEP 8/25: Initialize WebSocket Client - SUCCESS (0ms)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 9/25[0m[2m: [0m[36mAuthenticate[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:15.811] [info] [2025898] STEP 9/25: Authenticate - STARTING
+  [32m✓ SUCCESS[0m[2m (785ms)[0m[2m → [0mUsing API key as bearer token
+[2026-05-20 21:04:16.597] [info] [2025898] STEP 9/25: Authenticate - SUCCESS (785ms)
+
+[2m────────────────────────────────────────[0m
+  [1m[33mSTEP 10/25[0m[2m: [0m[36mVerify API Connectivity[0m
+[2m────────────────────────────────────────[0m
+[2026-05-20 21:04:16.597] [info] [2025898] STEP 10/25: Verify API Connectivity - STARTING
+  [31m[1m✗ FAILED[0m[2m (209ms)[0m[2m → [0mFATAL: API call failed - HTTP 401 (Check your session_token - may need JWT from Architect dashboard)
+[2026-05-20 21:04:16.807] [error] [2025898] STEP 10/25: Verify API Connectivity - FAILED: FATAL: API call failed - HTTP 401 (Check your session_token - may need JWT from Architect dashboard)
+[2026-05-20 21:04:16.807] [info] [2025898] ╔══════════════════════════════════════════════════════════════════╗
+[2026-05-20 21:04:16.807] [info] [2025898] ║                 STEP 25/25: GRACEFUL SHUTDOWN                    ║
+[2026-05-20 21:04:16.807] [info] [2025898] ╚══════════════════════════════════════════════════════════════════╝
+[2026-05-20 21:04:16.807] [info] [2025898] Shutdown reason: Startup failure at step 10
+[2026-05-20 21:04:16.807] [info] [2025898] [SHUTDOWN] cancelling 0 legs: ax_list=[]
+[2026-05-20 21:04:16.809] [info] [2025898] [SHUTDOWN] all cancels acked in 1ms — orders.json cleared
+[2026-05-20 21:04:16.810] [info] [2025898] [SHUTDOWN] Stopping strategies...
+[2026-05-20 21:04:16.810] [info] [2025898] [SHUTDOWN] Cancelling open orders on venue...
+[2026-05-20 21:04:16.810] [info] [2025898] [SHUTDOWN] cancel sweep: 0 local open orders tracked, 7 symbols to sweep
+[2026-05-20 21:04:17.016] [error] [2025898] [SHUTDOWN] cancel_all symbol=WTIOIL-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:17.225] [error] [2025898] [SHUTDOWN] cancel_all symbol=SPY-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:17.441] [error] [2025898] [SHUTDOWN] cancel_all symbol=XAG-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:17.648] [error] [2025898] [SHUTDOWN] cancel_all symbol=XAU-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:17.855] [error] [2025898] [SHUTDOWN] cancel_all symbol=MXNUSD-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:18.069] [error] [2025898] [SHUTDOWN] cancel_all symbol=JPYUSD-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:18.279] [error] [2025898] [SHUTDOWN] cancel_all symbol=EURUSD-PERP HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:18.486] [error] [2025898] [SHUTDOWN] cancel_all (unscoped) HTTP 401 FAILED — {"error":"invalid token"}
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] cancel sweep done: per_symbol ok=0 fail=7 unscoped_ok=0 → orders_cancelled=false
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Stopping external feed...
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Stopping market data...
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Disconnecting WebSocket...
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Draining event queues...
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Logging final statistics...
+[2026-05-20 21:04:18.988] [info] [2025898] Final Statistics:
+[2026-05-20 21:04:18.988] [info] [2025898]   Uptime: 0 seconds
+[2026-05-20 21:04:18.988] [info] [2025898]   Events Processed: 0
+[2026-05-20 21:04:18.988] [info] [2025898]   Orders Submitted: 0
+[2026-05-20 21:04:18.988] [info] [2025898]   Orders Filled: 0
+[2026-05-20 21:04:18.988] [info] [2025898]   Ticks Received: 0
+[2026-05-20 21:04:18.988] [info] [2025898] [SHUTDOWN] Flushing logs...
+[2026-05-20 21:04:18.988] [info] [2025898] ╔══════════════════════════════════════════════════════════════════╗
+[2026-05-20 21:04:18.988] [warning] [2025898] ║              SHUTDOWN COMPLETE (with warnings)                   ║
+[2026-05-20 21:04:18.988] [info] [2025898] ║              Duration:   2181 ms                                 ║
+[2026-05-20 21:04:18.988] [info] [2025898] ╚══════════════════════════════════════════════════════════════════╝
+
+⚠ Shutdown completed with warnings.

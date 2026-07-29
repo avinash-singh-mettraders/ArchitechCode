@@ -1,0 +1,70 @@
+# Build directories
+bin/
+build/
+cmake-build-*/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs (runtime generated)
+logs/
+
+# MM desk order templates (durable user data; survives code upgrades).
+# Override location via mm_desk.mm_templates_path in config.
+templates.json
+
+# Config files with secrets - NEVER commit API keys!
+config/default_config.json
+config/my_config.json
+config/*_config.json
+!config/config.example.json
+*.secrets.json
+.env
+
+# Local GUI / Neon (optional)
+config/credentials.local.json
+config/external_feed.local.json
+config/neon.json
+
+# Dependencies (fetched by CMake)
+_deps/
+
+# Object files
+*.o
+
+# Libraries
+*.a
+*.so
+*.dylib
+
+# Executables
+*.out
+
+# Debug
+*.dSYM/
+
+# Local test build tree (CMake output for tests; large, regenerable)
+build_tests/
+
+# Local TSAN build tree (CMake output for sanitizer runs; large, regenerable)
+build_tsan/
+
+# Ad-hoc log/trade dumps captured at repo root during debugging
+# (keep the root CMake build file, which also ends in .txt)
+/*.txt
+!/CMakeLists.txt
+
+# Local reference material (not source); tracked docs live under docs/
+/Market-Making Crypto Up or Down on Polymarket_ Theo, Features, and EV Playbook for a C++ Engine.pdf

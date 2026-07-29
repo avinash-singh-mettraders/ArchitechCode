@@ -1,0 +1,11 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart LR
+  title["3. runFullMmQuoteCycle — order of operations"]
+  style title fill:#f5f5f5,stroke:#999
+
+  A[sync inventory] --> B[shouldQuoteSide BUY / SELL]
+  B --> C{full cancel vs one-side cancel}
+  C --> D[spreads + basis + quote_tick]
+  D --> E[skew → raw bid/ask]
+  E --> F[finalizeMmPairOnTickGrid]
+  F --> G[leg_sz from step; qty per active leg]

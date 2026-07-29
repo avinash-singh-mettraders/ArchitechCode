@@ -1,0 +1,2 @@
+# MM Live Desk uses the Python standard library for Neon FIX (TCP) and for REST reference depth.
+# No pip packages are required for reference pricing.

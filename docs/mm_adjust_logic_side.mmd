@@ -1,0 +1,23 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+  title["2. Side gating — shouldQuoteSide(net vs max_position only)"]
+  style title fill:#f5f5f5,stroke:#999
+
+  N[net_ll = llround net position]
+  M["max_ll = max(1, max_position)"]
+
+  N --> SIDE{"Side == BUY ?"}
+  SIDE -->|yes| B1{"net_ll < 0 ?"}
+  B1 -->|yes| QB[want_bid = true]
+  B1 -->|no| B2{"net_ll < max_ll ?"}
+  B2 -->|yes| QB
+  B2 -->|no| NB[want_bid = false]
+
+  SIDE -->|no SELL| S1{"net_ll > 0 ?"}
+  S1 -->|yes| QA[want_ask = true]
+  S1 -->|no| S2{"|net_ll| < max_ll ?"}
+  S2 -->|yes| QA
+  S2 -->|no| NA[want_ask = false]
+
+  HINT["No order_size / resting qty in this gate"]
+  style HINT fill:#e8f4ff,stroke:#69c

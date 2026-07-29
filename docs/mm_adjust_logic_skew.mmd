@@ -1,0 +1,25 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+  title["1. Inventory skew — raw bid / ask (computeInventorySkewedRawBidAsk)"]
+  style title fill:#f5f5f5,stroke:#999
+
+  T[theo_midpoint] --> ADJTHEO["adjusted_theo = theo + basis"]
+  B[basis] --> ADJTHEO
+
+  N[net_po from position_state_] --> CHECK{"|net_po| < max_ll ?"}
+  CHECK -->|yes| UNITS["skew_tick_units = floor(net_po / adjust_position) × adjust_ticks"]
+  CHECK -->|no| ZERO["skew_tick_units = 0"]
+  UNITS --> SP["skew_price = skew_tick_units × quote_tick"]
+  ZERO --> SP
+
+  ADJTHEO --> RAWBID["raw_bid = adjusted_theo − bid_spread_ticks×tick − skew_price"]
+  SP --> RAWBID
+  RAWBID --> RAWASK["raw_ask = raw_bid + span_ticks×tick"]
+  SPAN["span_ticks = bid_spread_ticks + ask_spread_ticks"]
+  SPAN --> RAWASK
+
+  RAWASK --> OUT[→ finalizeMmPairOnTickGrid]
+  RAWBID --> OUT
+
+  NOTE["adjust_ticks multiplies the skew floor (inventory tick units)"]
+  style NOTE fill:#fff8e6,stroke:#cc9

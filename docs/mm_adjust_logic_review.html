@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Market maker: adjust &amp; skew logic (C++ review)</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root { --fg: #1a1a1a; --muted: #555; --border: #ccc; --bg: #fafafa; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--fg); max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.45; background: #fff; }
+    h1 { font-size: 1.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0.35rem; }
+    h2 { font-size: 1.15rem; margin-top: 2rem; color: #222; }
+    p, li { color: var(--muted); }
+    code { background: var(--bg); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.92em; }
+    .box { border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; background: var(--bg); }
+    .note { font-size: 0.95rem; }
+    .mermaid { margin: 1rem 0; }
+    @media print {
+      body { max-width: 100%; margin: 0; }
+      h2 { page-break-after: avoid; }
+      .mermaid { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Market maker: adjust &amp; skew logic</h1>
+  <p class="note">Review of the current C++ implementation in <code>MakeMarketStrategy.cpp</code> / <code>MakeMarketStrategy.h</code>. Generated for handoff — skew math, side gating, and config knobs.</p>
+
+  <div class="box">
+    <strong>Summary</strong>
+    <ul>
+      <li><strong>Skew</strong> shifts raw bid/ask around <code>adjusted_theo = theo_midpoint + basis</code> using <code>skew_tick_units = floor(NetPo / adjust_position) × adjust_ticks</code> when <code>|NetPo| &lt; max_position</code>; <code>skew_price = skew_tick_units × quote_tick</code>.</li>
+      <li><strong>Side visibility</strong> (<code>shouldQuoteSide</code>) uses <strong>position vs max only</strong> — no order size or resting remainder in the gate.</li>
+      <li><strong>Spreads</strong>: base bid/ask spread ticks + resting depth + optional fill extras; then tick-grid finalize.</li>
+    </ul>
+  </div>
+
+  <h2>1. Inventory skew (raw bid / ask)</h2>
+  <p>Implemented in <code>computeInventorySkewedRawBidAsk</code> and mirrored in <code>runFullMmQuoteCycle</code> before <code>finalizeMmPairOnTickGrid</code>.</p>
+  <div class="mermaid">
+flowchart TD
+  T[theo_midpoint] --> ADJTHEO["adjusted_theo = theo + basis"]
+  B[basis] --> ADJTHEO
+  N[net_po] --> CHECK{"|net_po| &lt; max_ll ?"}
+  CHECK -->|yes| UNITS["skew_tick_units = floor(net_po / adjust_position) * adjust_ticks"]
+  CHECK -->|no| ZERO["skew_tick_units = 0"]
+  UNITS --> SP["skew_price = skew_tick_units * quote_tick"]
+  ZERO --> SP
+  ADJTHEO --> RAWBID["raw_bid = adjusted_theo - bid_spread_ticks*tick - skew_price"]
+  SP --> RAWBID
+  RAWBID --> RAWASK["raw_ask = raw_bid + span_ticks*tick"]
+  SPAN["span_ticks = bid_spread_ticks + ask_spread_ticks"] --> RAWASK
+  RAWASK --> OUT[finalizeMmPairOnTickGrid]
+  RAWBID --> OUT
+  </div>
+
+  <h2>2. Side gating — shouldQuoteSide</h2>
+  <p>Uses rounded net position and <code>max_position</code> as a cap magnitude. BUY side shown; SELL is symmetric (long inventory still allows ask).</p>
+  <div class="mermaid">
+flowchart TD
+  N[net_ll = llround net position]
+  M[max_ll = max 1, max_position]
+  N --> BUY{"Side == BUY ?"}
+  BUY -->|yes| B1{"net_ll < 0 ?"}
+  B1 -->|yes| QB[want_bid = true]
+  B1 -->|no| B2{"net_ll < max_ll ?"}
+  B2 -->|yes| QB
+  B2 -->|no| NB[want_bid = false]
+  BUY -->|no SELL| S1{"net_ll > 0 ?"}
+  S1 -->|yes| QA[want_ask = true]
+  S1 -->|no| S2{"|net_ll| < max_ll ?"}
+  S2 -->|yes| QA
+  S2 -->|no| NA[want_ask = false]
+  end
+  </div>
+
+  <h2>3. runFullMmQuoteCycle — high level</h2>
+  <p>After sync: <code>shouldQuoteSide</code> → optional cancel path → build spreads → skew raw prices → grid finalize → quantities use same step-rounded size per active leg.</p>
+  <div class="mermaid">
+flowchart LR
+  A[syncInventoryFromExchangePortfolio] --> B[shouldQuoteSide BUY/SELL]
+  B --> C{cancel strategy}
+  C --> D[spread ticks + basis + quote_tick]
+  D --> E[skew raw bid/ask]
+  E --> F[finalizeMmPairOnTickGrid]
+  F --> G[qty_bid / qty_ask from want_* and leg_sz]
+  end
+  </div>
+
+  <h2>4. Config keys (relevant)</h2>
+  <ul>
+    <li><code>market_maker.adjust_position</code> — divisor inside <code>floor(NetPo / adjust_position)</code>.</li>
+    <li><code>market_maker.adjust_ticks</code> — multiplier on that floor for skew tick units (min 1).</li>
+    <li><code>market_maker.max_position</code> — bounds skew (when <code>|NetPo| ≥ max</code>, skew units = 0) and gates sides in <code>shouldQuoteSide</code>.</li>
+  </ul>
+
+  <p style="margin-top: 2rem; font-size: 0.85rem; color: #888;">Print this page to PDF (browser Print → Save as PDF) or use headless Chrome <code>--print-to-pdf</code>.</p>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { curve: 'basis' } });
+  </script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+{
+    "_comment": "Copy to config/neon.json (gitignored). Used by C++ trading_client and tools/mm_live_desk.py for the Neon market-data leg.",
+    "connection_string": "postgresql://USER:PASSWORD@HOST.neon.tech/neondb?sslmode=require"
+}

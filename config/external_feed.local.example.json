@@ -1,0 +1,15 @@
+{
+    "_comment": "Copy to external_feed.local.json in the SAME directory as your main config file. Gitignored. Loaded after the main JSON and overrides nested keys (e.g. FIX password) without editing default_config.json.",
+    "external_feed": {
+        "fix": {
+            "password": "YOUR_FIX_PASSWORD",
+            "port": 14507
+        }
+    },
+    "mettraders_feed": {
+        "enabled": true,
+        "url": "wss://marketdata.mettradersdataservices.com",
+        "fix_symbol": "GOLD",
+        "type": "websocket"
+    }
+}

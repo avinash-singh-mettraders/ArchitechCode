@@ -1,0 +1,140 @@
+# Proposed config halving — NOT APPLIED
+#
+# The desk pricing spec (2026-05-12) flipped width semantics from
+#   half-spread = mid * bps / 20000   (legacy: bid_w + ask_w = total spread)
+# to
+#   per-side offset = mid * bps / 10000   (current: each side gets the full bps)
+#
+# Under the new code, a config that still says bid_w = 20 / ask_w = 20 will
+# quote a pair that is 40 bps apart on the venue, instead of the 20 bps the
+# operator was getting under the old code. This patch HALVES every
+#   width / bid_width / ask_width / width_bps
+# key in `config/default_config.json` and `config/config.example.json` plus
+# `desk_width_emergency_floor_bps` (6 → 3) in `config/config.example.json` so
+# the on-venue spread under the NEW per-side bps semantics matches the
+# on-venue spread that was being placed under the OLD half-spread semantics.
+#
+# Note: `config/default_config.json` does NOT currently declare
+# `market_maker.desk_width_emergency_floor_bps`; the runtime falls back to the
+# hard-coded default of 6 in `src/config/Config.cpp:1126`. If this halving is
+# approved, the C++ default should be changed to 3 in a follow-up patch (or
+# the key added to default_config.json with value 3).
+#
+# This patch is DO-NOT-AUTO-APPLY. To verify it would apply cleanly:
+#   git apply --check proposed_config_halving.patch
+# To apply once approved:
+#   git apply proposed_config_halving.patch
+#
+--- a/config/default_config.json
++++ b/config/default_config.json
+@@ -334,9 +334,9 @@
+         "adjust_position": 50000,
+         "adjust_ticks": 2,
+         "allow_multi_mm_per_ax": true,
+-        "ask_width": 20,
++        "ask_width": 10,
+         "basis": 0,
+-        "bid_width": 20,
++        "bid_width": 10,
+         "cancel_on_disconnect": true,
+         "cancel_on_external_feed_invalid": true,
+         "current_reload_count": 0,
+@@ -363,7 +363,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 100,
+                         "order_size_step": 100,
+-                        "width": 6
++                        "width": 3
+                     }
+                 ],
+                 "max_position": 500,
+@@ -389,7 +389,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 10000,
+                         "order_size_step": 10000,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 50000,
+@@ -415,7 +415,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 1000,
+                         "order_size_step": 1000,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 5000,
+@@ -440,7 +440,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 1,
+                         "order_size_step": 1,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 10,
+@@ -466,7 +466,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 10,
+                         "order_size_step": 1,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 100,
+@@ -492,7 +492,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 10,
+                         "order_size_step": 1,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 100,
+@@ -518,7 +518,7 @@
+                         "min_theo_move_ticks_to_requote": 2,
+                         "order_size": 1,
+                         "order_size_step": 1,
+-                        "width": 10
++                        "width": 5
+                     }
+                 ],
+                 "max_position": 5,
+@@ -563,8 +563,8 @@
+         "theo_symbol": "EUR/USD",
+         "update_interval_sec": 2,
+         "validate_vs_market": true,
+-        "width": 20,
+-        "width_bps": 10
++        "width": 10,
++        "width_bps": 5
+     },
+     "mettraders_feed": {
+         "_comment": "Mettraders market-data websocket. Feed is marked UP after websocket handshake; raw payload logging only for now (no price parsing yet).",
+--- a/config/config.example.json
++++ b/config/config.example.json
+@@ -203,10 +203,10 @@
+         "update_interval_sec": 2,
+         "price_tick": 0.0001,
+         "_comment_tick": "Must match AX /instruments tick for this product",
+-        "width": 10,
++        "width": 5,
+         "_comment_width": "Per-side width in basis points of the pricing mid (desk spec 2026-05-12). bid_offset = mid*W/10000, ask_offset = mid*W/10000 → with bid_w==ask_w==W the placed pair is 2*W bps apart before tick rounding (skew is common-mode and cancels in the span). 'width' is the symmetric default; override per side with bid_width / ask_width.",
+-        "bid_width": 10,
+-        "ask_width": 10,
++        "bid_width": 5,
++        "ask_width": 5,
+         "_comment_bid_ask_width": "Optional per-side override in bps (NOT ticks); omit both to use 'width' for both legs. Asymmetric values trigger a one-shot MM_CONFIG WARN at startup.",
+         "spread_ticks": 5,
+         "_comment_spread_ticks": "Legacy alias for the symmetric width (bps). 'width' is preferred.",
+@@ -247,7 +247,7 @@
+         "orphan_fill_unknown_symbol_reconcile": true,
+         "_comment_gateway_open_orders_reconcile": "If >0, every N seconds compare GET /open-orders to local OrderManager actives; if the venue no longer lists an exchange OID (e.g. user cancelled on the exchange GUI), mark the local order CANCELLED so MM strategies clear bid/ask ids. Default 0=off. Try 15–60 with mm_req_* stacks.",
+         "_comment_desk_width": "Desk mm_req_*: if orders.json omits stack width, C++ uses instruments[ax].default_width_bps (or first manual_stack.width_bps), then desk_width_emergency_floor_bps — never legacy global spread_ticks for desk.",
+-        "desk_width_emergency_floor_bps": 6,
++        "desk_width_emergency_floor_bps": 3,
+         "gateway_open_orders_reconcile_sec": 0
+     },
+     "mm_desk": {
