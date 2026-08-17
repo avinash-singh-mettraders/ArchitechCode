@@ -6077,13 +6077,9 @@ async function bootDesk() {
       model.status.style.color = "#facc15";
       model.status.textContent = "Starting...";
 
-      var startResponse = await api(
+      var startResponse = await mmDeskPostWithResumeConfirm(
         "/api/desk/place_order_async",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        },
+        payload,
         15000
       );
 
