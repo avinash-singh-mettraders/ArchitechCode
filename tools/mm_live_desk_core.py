@@ -658,6 +658,28 @@ _MM_TEMPLATE_PARAM_FIELDS = (
     "slope",
 )
 
+_MM_MASTER_TEMPLATE_KEY = "__MASTER_GRID__"
+_MM_MASTER_TEMPLATE_TYPE = "master_grid"
+_MM_MASTER_TEMPLATE_MAX_ROWS = 4
+
+_MM_MASTER_TEMPLATE_ROW_FIELDS = (
+    "enabled",
+    "level",
+    "ax_symbol",
+    "theo_source",
+    "theo_venue_symbol",
+    "reference_fix_symbol",
+    "instrument_max_position",
+    "width_bps",
+    "order_size",
+    "adjust_position",
+    "adjust_ticks",
+    "min_theo_move_ticks_to_requote",
+    "max_reload_cycles",
+    "quote_snapshot",
+    "pricer_snapshot",
+    "slope",
+)
 
 def _resolve_mm_templates_path(merged_cfg: dict) -> Path:
     """``mm_desk.mm_templates_path`` — manual-order template store.
@@ -745,10 +767,86 @@ def _mm_template_next_name(doc: dict, instrument: str) -> str:
 
 
 def _mm_sanitize_template_params(params_in: object) -> dict:
-    """Pick exactly the known popup fields from an incoming params object so the
-    stored record can't accumulate arbitrary keys."""
+    """
+    Sanitize either:
+
+    1. A legacy/single-order template:
+         {theo_source, width_bps, order_size, ...}
+
+    2. A master-grid template:
+         {
+             "template_type": "master_grid",
+             "rows": [{...}, {...}, ...]
+         }
+
+    Single-order template behavior remains unchanged.
+    """
     src = params_in if isinstance(params_in, dict) else {}
-    return {k: src.get(k) for k in _MM_TEMPLATE_PARAM_FIELDS}
+
+    template_type = str(
+        src.get("template_type") or ""
+    ).strip().lower()
+
+    if template_type != _MM_MASTER_TEMPLATE_TYPE:
+        return {
+            key: src.get(key)
+            for key in _MM_TEMPLATE_PARAM_FIELDS
+        }
+
+    raw_rows = src.get("rows")
+    if not isinstance(raw_rows, list):
+        raw_rows = []
+
+    clean_rows: list[dict] = []
+
+    for index, row in enumerate(
+        raw_rows[:_MM_MASTER_TEMPLATE_MAX_ROWS]
+    ):
+        if not isinstance(row, dict):
+            continue
+
+        clean_row = {
+            key: row.get(key)
+            for key in _MM_MASTER_TEMPLATE_ROW_FIELDS
+        }
+
+        # Always use a deterministic visual level.
+        try:
+            level = int(clean_row.get("level") or index + 1)
+        except (TypeError, ValueError):
+            level = index + 1
+
+        clean_row["level"] = max(
+            1,
+            min(_MM_MASTER_TEMPLATE_MAX_ROWS, level),
+        )
+
+        clean_row["enabled"] = bool(
+            clean_row.get("enabled", True)
+        )
+
+        clean_row["ax_symbol"] = str(
+            clean_row.get("ax_symbol") or ""
+        ).strip()
+
+        clean_row["theo_source"] = str(
+            clean_row.get("theo_source") or ""
+        ).strip()
+
+        clean_row["theo_venue_symbol"] = str(
+            clean_row.get("theo_venue_symbol") or ""
+        ).strip()
+
+        clean_row["reference_fix_symbol"] = str(
+            clean_row.get("reference_fix_symbol") or ""
+        ).strip()
+
+        clean_rows.append(clean_row)
+
+    return {
+        "template_type": _MM_MASTER_TEMPLATE_TYPE,
+        "rows": clean_rows,
+    }
 
 
 def mm_templates_upsert(
@@ -10017,6 +10115,7 @@ __REF_DEPTH_COL_BLOCK__
 <div class="fld" id="manualOrderQuickBlock">
 <button type="button" class="btn btn-primary" id="btnAddManualOrder" style="width:100%;padding:10px" title="Manual stack → POST /api/desk/place_order">Place manual order</button>
 <button type="button" class="btn" id="btnTemplates" style="width:100%;margin-top:6px" title="Open saved order templates (templates.json) → edit & place">Templates</button>
+<button type="button" class="btn" id="btnMasterTemplate" style="width:100%;margin-top:6px" title="Open a four-level quote grid and submit all enabled levels">Master Template</button>
 <button type="button" class="btn btn-danger" id="btnCancelOrder" style="width:100%;margin-top:6px;background:#b91c1c;border-color:#7f1d1d;color:#fff" title="Remove one stack from orders.json (venue cancel first)">Cancel Order</button>
 <button type="button" class="btn" id="btnOrdersReset" style="width:100%;margin-top:6px" title="POST /api/desk/orders_reset — cancel all stack OIDs from current orders.json then wipe file">Clear all stacks (clean slate)</button>
 </div>
