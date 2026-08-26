@@ -6392,62 +6392,207 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
         raw_bid, raw_ask, bid_w0, ask_w0, tick
     )
 
+    # m_bid, m_ask = _best_bid_ask_ax(st, sym)
+    # if m_bid is None or m_ask is None or m_ask < m_bid:
+    #     try:
+    #         bb, aa = fetch_ax_book_st(st, sym, 5)
+    #         if bb and aa:
+    #             m_bid, m_ask = float(bb[0][0]), float(aa[0][0])
+    #     except Exception:
+    #         pass
+
+    # ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
+    # bid_px_adj, ask_px_adj, auto_non_cross_ok = _adjust_mm_pair_to_non_cross(
+    #     bid_px,
+    #     ask_px,
+    #     bid_spread_bps=bid_w0,
+    #     ask_spread_bps=ask_w0,
+    #     quote_tick=tick,
+    #     market_bid=m_bid,
+    #     market_ask=m_ask,
+    # )
+    # if auto_non_cross_ok:
+    #     bid_px = bid_px_adj
+    #     ask_px = ask_px_adj
+    #     ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
+    # trace_pre: list[tuple[str, object]] = [
+    #     ("log_context", log_context),
+    #     ("ax_symbol", sym),
+    #     ("theo_mid", mid),
+    #     ("new_mid_after_pricer_snapshot", new_mid),
+    #     ("pricer_xform_active", bool(pricer_snapshot > 0.0 and quote_snapshot > 0.0)),
+    #     ("quote_snapshot", quote_snapshot),
+    #     ("pricer_snapshot", pricer_snapshot),
+    #     ("slope", slope),
+    #     ("adjusted_theo", adjusted_theo),
+    #     ("price_tick", tick),
+    #     ("width_bps", width_ticks),
+    #     ("auto_non_cross_adjusted", auto_non_cross_ok),
+    #     ("bid_px", bid_px),
+    #     ("ask_px", ask_px),
+    #     ("ax_bid", m_bid),
+    #     ("ax_ask", m_ask),
+    #     ("non_cross_ok", ok_v),
+    #     ("non_cross_reason", vreason if not ok_v else ""),
+    # ]
+    # if not ok_v:
+    #     log_mm_desk_order_trace(st, f"{log_context} (validation failed, no orders sent)", trace_pre)
+    #     return {
+    #         "ok": False,
+    #         "error": vreason,
+    #         "bid": bid_px,
+    #         "ask": ask_px,
+    #         "ax_bid": m_bid,
+    #         "ax_ask": m_ask,
+    #     }
+
+    # want_bid = should_quote_mm_side(net, max_po, buy_side=True)
+    # want_ask = should_quote_mm_side(net, max_po, buy_side=False)
+
+        # This check applies only to the first manual placement handled by this
+    # function. The existing automatic requote flow is intentionally unchanged.
     m_bid, m_ask = _best_bid_ask_ax(st, sym)
-    if m_bid is None or m_ask is None or m_ask < m_bid:
+
+    # If the cached book is missing or invalid, fetch a fresh AX book before
+    # deciding whether the manual quote is marketable.
+    if (
+        m_bid is None
+        or m_ask is None
+        or not math.isfinite(m_bid)
+        or not math.isfinite(m_ask)
+        or m_bid <= 0
+        or m_ask <= 0
+        or m_ask <= m_bid
+    ):
         try:
             bb, aa = fetch_ax_book_st(st, sym, 5)
             if bb and aa:
-                m_bid, m_ask = float(bb[0][0]), float(aa[0][0])
+                m_bid = float(bb[0][0])
+                m_ask = float(aa[0][0])
         except Exception:
-            pass
+            m_bid, m_ask = None, None
 
-    ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
-    bid_px_adj, ask_px_adj, auto_non_cross_ok = _adjust_mm_pair_to_non_cross(
-        bid_px,
-        ask_px,
-        bid_spread_bps=bid_w0,
-        ask_spread_bps=ask_w0,
-        quote_tick=tick,
-        market_bid=m_bid,
-        market_ask=m_ask,
-    )
-    if auto_non_cross_ok:
-        bid_px = bid_px_adj
-        ask_px = ask_px_adj
-        ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
+    want_bid = should_quote_mm_side(net, max_po, buy_side=True)
+    want_ask = should_quote_mm_side(net, max_po, buy_side=False)
+
     trace_pre: list[tuple[str, object]] = [
         ("log_context", log_context),
         ("ax_symbol", sym),
         ("theo_mid", mid),
         ("new_mid_after_pricer_snapshot", new_mid),
-        ("pricer_xform_active", bool(pricer_snapshot > 0.0 and quote_snapshot > 0.0)),
+        ("pricer_xform_active", bool(
+            pricer_snapshot > 0.0 and quote_snapshot > 0.0
+        )),
         ("quote_snapshot", quote_snapshot),
         ("pricer_snapshot", pricer_snapshot),
         ("slope", slope),
         ("adjusted_theo", adjusted_theo),
         ("price_tick", tick),
         ("width_bps", width_ticks),
-        ("auto_non_cross_adjusted", auto_non_cross_ok),
         ("bid_px", bid_px),
         ("ask_px", ask_px),
         ("ax_bid", m_bid),
         ("ax_ask", m_ask),
-        ("non_cross_ok", ok_v),
-        ("non_cross_reason", vreason if not ok_v else ""),
+        ("want_bid", want_bid),
+        ("want_ask", want_ask),
     ]
-    if not ok_v:
-        log_mm_desk_order_trace(st, f"{log_context} (validation failed, no orders sent)", trace_pre)
+
+    # Fail closed if the current AX top of book cannot be established. Without
+    # it, the server cannot guarantee that the first manual quote is passive.
+    if (
+        m_bid is None
+        or m_ask is None
+        or not math.isfinite(m_bid)
+        or not math.isfinite(m_ask)
+        or m_bid <= 0
+        or m_ask <= 0
+        or m_bid >= m_ask
+    ):
+        error_message = (
+            f"Cannot validate the {sym} manual quote because the current "
+            "Architect best bid and best ask are unavailable. No quote was "
+            "sent. Please wait for a valid order book and submit again."
+        )
+
+        log_mm_desk_order_trace(
+            st,
+            f"{log_context} (top of book unavailable; no orders sent)",
+            trace_pre,
+        )
+
         return {
             "ok": False,
-            "error": vreason,
+            "error_code": "TOP_OF_BOOK_UNAVAILABLE",
+            "error": error_message,
+            "ax_symbol": sym,
             "bid": bid_px,
             "ask": ask_px,
             "ax_bid": m_bid,
             "ax_ask": m_ask,
         }
 
-    want_bid = should_quote_mm_side(net, max_po, buy_side=True)
-    want_ask = should_quote_mm_side(net, max_po, buy_side=False)
+    # A BUY at or above the best ask is immediately marketable.
+    if want_bid and bid_px >= m_ask:
+        error_message = (
+            f"BUY quote {bid_px} will trade immediately against the current "
+            f"best ask {m_ask}. Skipping this level. Please put a valid quote "
+            f"for this level."
+        )
+
+        log_mm_desk_order_trace(
+            st,
+            f"{log_context} (marketable BUY rejected; no orders sent)",
+            trace_pre + [
+                ("rejected_side", "BUY"),
+                ("rejection_reason", "bid_at_or_above_best_ask"),
+            ],
+        )
+
+        return {
+            "ok": False,
+            "error_code": "QUOTE_WOULD_TRADE_IMMEDIATELY",
+            "error": error_message,
+            "side": "BUY",
+            "quote_price": bid_px,
+            "best_bid": m_bid,
+            "best_ask": m_ask,
+            "bid": bid_px,
+            "ask": ask_px,
+            "ax_bid": m_bid,
+            "ax_ask": m_ask,
+        }
+
+    # A SELL at or below the best bid is immediately marketable.
+    if want_ask and ask_px <= m_bid:
+        error_message = (
+            f"SELL quote {ask_px} will trade immediately against the current "
+            f"best bid {m_bid}. Skipping this level. Please put a valid quote "
+            f"for this level."
+        )
+
+        log_mm_desk_order_trace(
+            st,
+            f"{log_context} (marketable SELL rejected; no orders sent)",
+            trace_pre + [
+                ("rejected_side", "SELL"),
+                ("rejection_reason", "ask_at_or_below_best_bid"),
+            ],
+        )
+
+        return {
+            "ok": False,
+            "error_code": "QUOTE_WOULD_TRADE_IMMEDIATELY",
+            "error": error_message,
+            "side": "SELL",
+            "quote_price": ask_px,
+            "best_bid": m_bid,
+            "best_ask": m_ask,
+            "bid": bid_px,
+            "ask": ask_px,
+            "ax_bid": m_bid,
+            "ax_ask": m_ask,
+        }
+
     if qty <= 0:
         return {"ok": False, "error": "order_size <= 0", "net_position": net}
     qty_bid, qty_ask = mm_desk_pair_leg_quantities(want_bid, want_ask, int(qty), step=ostep)
@@ -10773,6 +10918,62 @@ def run_web_main(port: int = 8765) -> None:
         except Exception as e:
             code = 500
             body = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+        # The async route created a pending orders.json row before starting this
+        # job. If the first manual quote was rejected as marketable, remove that
+        # pending row because no order was submitted to the venue.
+        if (
+            isinstance(body, dict)
+            and not body.get("ok")
+            and body.get("error_code")
+            in (
+                "QUOTE_WOULD_TRADE_IMMEDIATELY",
+                "TOP_OF_BOOK_UNAVAILABLE",
+            )
+        ):
+            try:
+                merged_cfg = get_merged_config_dict()
+                ax_symbol = str(
+                    body.get("ax_symbol")
+                    or payload2.get("ax_symbol")
+                    or payload2.get("symbol")
+                    or ""
+                ).strip()
+
+                with _MM_ORDERS_CONFIG_LOCK:
+                    doc = load_mm_orders_config(merged_cfg)
+                    removed_count = _orders_json_remove_stack_id_everywhere(
+                        doc,
+                        stack_id,
+                        ax_symbol,
+                    )
+
+                    if removed_count == 0 and ax_symbol:
+                        removed_count = _orders_json_remove_stack_id_everywhere(
+                            doc,
+                            stack_id,
+                            "",
+                        )
+
+                    if removed_count > 0:
+                        ok_cleanup, cleanup_error = save_mm_orders_config(
+                            merged_cfg,
+                            doc,
+                        )
+
+                        if not ok_cleanup:
+                            desk_log(
+                                st,
+                                f"manual quote rejection cleanup failed: "
+                                f"stack_id={stack_id} error={cleanup_error}",
+                            )
+            except Exception as cleanup_exc:
+                desk_log(
+                    st,
+                    f"manual quote rejection cleanup exception: "
+                    f"stack_id={stack_id} "
+                    f"error={type(cleanup_exc).__name__}: {cleanup_exc}",
+                )
 
         with place_order_jobs_lock:
             place_order_jobs[job_id] = {
