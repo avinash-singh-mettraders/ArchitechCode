@@ -3015,6 +3015,34 @@ class DeskSharedState:
             live_orders = _enrich_live_orders_with_orders_json_move_flags(
                 mm_orders_config, live_orders
             )
+
+            # Expose every C++ external-theo midpoint to the browser.
+            # Neon multi-symbol quotes are stored in mm_external_theo.json under
+            # quotes_by_canonical and may not have corresponding ref_all_books rows.
+            cpp_theo_cache = read_cpp_theo_cache_for_desk() or {}
+            cpp_quotes = (
+                cpp_theo_cache.get("quotes_by_canonical")
+                if isinstance(cpp_theo_cache, dict)
+                else {}
+            )
+
+            theo_mids_by_symbol: dict[str, float] = {}
+
+            if isinstance(cpp_quotes, dict):
+                for quote_symbol, quote_data in cpp_quotes.items():
+                    if not isinstance(quote_data, dict):
+                        continue
+
+                    quote_mid = _to_float(quote_data.get("mid"))
+
+                    if (
+                        quote_mid is not None
+                        and math.isfinite(quote_mid)
+                        and quote_mid > 0
+                    ):
+                        theo_mids_by_symbol[str(quote_symbol)] = float(
+                            quote_mid
+                        )
             return {
                 "rest_endpoint": self.rest_endpoint,
                 "ws_endpoint": self.ws_endpoint or "(from default_config)",
@@ -3062,6 +3090,7 @@ class DeskSharedState:
                 "book_reference": {"bids": bb, "asks": ba},
                 "book_ax": {"bids": ab, "asks": aa},
                 "ref_all_books": bn_all_out,
+                "theo_mids_by_symbol": theo_mids_by_symbol,
                 "ref_book_sources": {
                     str(ref_sym): _theo_source_for_ref_in_mm(self, str(ref_sym))
                     for ref_sym in self.ref_book_symbols
@@ -6305,69 +6334,11 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
         raw_bid, raw_ask, bid_w0, ask_w0, tick
     )
 
-    # m_bid, m_ask = _best_bid_ask_ax(st, sym)
-    # if m_bid is None or m_ask is None or m_ask < m_bid:
-    #     try:
-    #         bb, aa = fetch_ax_book_st(st, sym, 5)
-    #         if bb and aa:
-    #             m_bid, m_ask = float(bb[0][0]), float(aa[0][0])
-    #     except Exception:
-    #         pass
-
-    # ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
-    # bid_px_adj, ask_px_adj, auto_non_cross_ok = _adjust_mm_pair_to_non_cross(
-    #     bid_px,
-    #     ask_px,
-    #     bid_spread_bps=bid_w0,
-    #     ask_spread_bps=ask_w0,
-    #     quote_tick=tick,
-    #     market_bid=m_bid,
-    #     market_ask=m_ask,
-    # )
-    # if auto_non_cross_ok:
-    #     bid_px = bid_px_adj
-    #     ask_px = ask_px_adj
-    #     ok_v, vreason = validate_mm_quotes_non_cross(bid_px, ask_px, m_bid, m_ask)
-    # trace_pre: list[tuple[str, object]] = [
-    #     ("log_context", log_context),
-    #     ("ax_symbol", sym),
-    #     ("theo_mid", mid),
-    #     ("new_mid_after_pricer_snapshot", new_mid),
-    #     ("pricer_xform_active", bool(pricer_snapshot > 0.0 and quote_snapshot > 0.0)),
-    #     ("quote_snapshot", quote_snapshot),
-    #     ("pricer_snapshot", pricer_snapshot),
-    #     ("slope", slope),
-    #     ("adjusted_theo", adjusted_theo),
-    #     ("price_tick", tick),
-    #     ("width_bps", width_ticks),
-    #     ("auto_non_cross_adjusted", auto_non_cross_ok),
-    #     ("bid_px", bid_px),
-    #     ("ask_px", ask_px),
-    #     ("ax_bid", m_bid),
-    #     ("ax_ask", m_ask),
-    #     ("non_cross_ok", ok_v),
-    #     ("non_cross_reason", vreason if not ok_v else ""),
-    # ]
-    # if not ok_v:
-    #     log_mm_desk_order_trace(st, f"{log_context} (validation failed, no orders sent)", trace_pre)
-    #     return {
-    #         "ok": False,
-    #         "error": vreason,
-    #         "bid": bid_px,
-    #         "ask": ask_px,
-    #         "ax_bid": m_bid,
-    #         "ax_ask": m_ask,
-    #     }
-
-    # want_bid = should_quote_mm_side(net, max_po, buy_side=True)
-    # want_ask = should_quote_mm_side(net, max_po, buy_side=False)
-
-        # This check applies only to the first manual placement handled by this
-    # function. The existing automatic requote flow is intentionally unchanged.
+    # This check applies only to the first manual/template placement.
+    # Automatic requotes after placement are intentionally unchanged.
     m_bid, m_ask = _best_bid_ask_ax(st, sym)
 
-    # If the cached book is missing or invalid, fetch a fresh AX book before
-    # deciding whether the manual quote is marketable.
+    # If the cached AX book is missing or invalid, request the current book.
     if (
         m_bid is None
         or m_ask is None
@@ -6375,7 +6346,7 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
         or not math.isfinite(m_ask)
         or m_bid <= 0
         or m_ask <= 0
-        or m_ask <= m_bid
+        or m_bid >= m_ask
     ):
         try:
             bb, aa = fetch_ax_book_st(st, sym, 5)
@@ -6385,33 +6356,12 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
         except Exception:
             m_bid, m_ask = None, None
 
+    # Position limits may disable one side. Only validate sides that would
+    # actually be submitted.
     want_bid = should_quote_mm_side(net, max_po, buy_side=True)
     want_ask = should_quote_mm_side(net, max_po, buy_side=False)
 
-    trace_pre: list[tuple[str, object]] = [
-        ("log_context", log_context),
-        ("ax_symbol", sym),
-        ("theo_mid", mid),
-        ("new_mid_after_pricer_snapshot", new_mid),
-        ("pricer_xform_active", bool(
-            pricer_snapshot > 0.0 and quote_snapshot > 0.0
-        )),
-        ("quote_snapshot", quote_snapshot),
-        ("pricer_snapshot", pricer_snapshot),
-        ("slope", slope),
-        ("adjusted_theo", adjusted_theo),
-        ("price_tick", tick),
-        ("width_bps", width_ticks),
-        ("bid_px", bid_px),
-        ("ask_px", ask_px),
-        ("ax_bid", m_bid),
-        ("ax_ask", m_ask),
-        ("want_bid", want_bid),
-        ("want_ask", want_ask),
-    ]
-
-    # Fail closed if the current AX top of book cannot be established. Without
-    # it, the server cannot guarantee that the first manual quote is passive.
+    # Do not submit when the AX top of book cannot be established.
     if (
         m_bid is None
         or m_ask is None
@@ -6422,15 +6372,14 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
         or m_bid >= m_ask
     ):
         error_message = (
-            f"Cannot validate the {sym} manual quote because the current "
-            "Architect best bid and best ask are unavailable. No quote was "
-            "sent. Please wait for a valid order book and submit again."
+            f"Cannot validate the {sym} quote because the current Architect "
+            "best bid and best ask are unavailable. Orders not sent. "
+            "Please wait for a valid order book and submit again."
         )
 
-        log_mm_desk_order_trace(
+        desk_log(
             st,
-            f"{log_context} (top of book unavailable; no orders sent)",
-            trace_pre,
+            f"{log_context}: top of book unavailable; no orders sent",
         )
 
         return {
@@ -6440,70 +6389,60 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
             "ax_symbol": sym,
             "bid": bid_px,
             "ask": ask_px,
-            "ax_bid": m_bid,
-            "ax_ask": m_ask,
+            "best_bid": m_bid,
+            "best_ask": m_ask,
         }
 
-    # A BUY at or above the best ask is immediately marketable.
+    # A BUY at or above the current best ask is immediately marketable.
     if want_bid and bid_px >= m_ask:
         error_message = (
             f"BUY quote {bid_px} will trade immediately against the current "
-            f"best ask {m_ask}. Skipping this level. Please put a valid quote "
-            f"for this level."
+            f"best ask {m_ask}. Orders not sent. Please put a valid quote "
+            "for this level."
         )
 
-        log_mm_desk_order_trace(
+        desk_log(
             st,
-            f"{log_context} (marketable BUY rejected; no orders sent)",
-            trace_pre + [
-                ("rejected_side", "BUY"),
-                ("rejection_reason", "bid_at_or_above_best_ask"),
-            ],
+            f"{log_context}: marketable BUY rejected; no orders sent",
         )
 
         return {
             "ok": False,
             "error_code": "QUOTE_WOULD_TRADE_IMMEDIATELY",
             "error": error_message,
+            "ax_symbol": sym,
             "side": "BUY",
             "quote_price": bid_px,
             "best_bid": m_bid,
             "best_ask": m_ask,
             "bid": bid_px,
             "ask": ask_px,
-            "ax_bid": m_bid,
-            "ax_ask": m_ask,
         }
 
-    # A SELL at or below the best bid is immediately marketable.
+    # A SELL at or below the current best bid is immediately marketable.
     if want_ask and ask_px <= m_bid:
         error_message = (
             f"SELL quote {ask_px} will trade immediately against the current "
-            f"best bid {m_bid}. Skipping this level. Please put a valid quote "
-            f"for this level."
+            f"best bid {m_bid}. Orders not sent. Please put a valid quote "
+            "for this level."
         )
 
-        log_mm_desk_order_trace(
+        desk_log(
             st,
-            f"{log_context} (marketable SELL rejected; no orders sent)",
-            trace_pre + [
-                ("rejected_side", "SELL"),
-                ("rejection_reason", "ask_at_or_below_best_bid"),
-            ],
+            f"{log_context}: marketable SELL rejected; no orders sent",
         )
 
         return {
             "ok": False,
             "error_code": "QUOTE_WOULD_TRADE_IMMEDIATELY",
             "error": error_message,
+            "ax_symbol": sym,
             "side": "SELL",
             "quote_price": ask_px,
             "best_bid": m_bid,
             "best_ask": m_ask,
             "bid": bid_px,
             "ask": ask_px,
-            "ax_bid": m_bid,
-            "ax_ask": m_ask,
         }
 
     if qty <= 0:
