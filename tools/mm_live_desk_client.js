@@ -3016,6 +3016,36 @@ async function bootDesk() {
     return null;
   }
 
+  function mmDeskFindTheoMid(mids, symbols) {
+    mids = mids && typeof mids === "object" ? mids : {};
+    symbols = Array.isArray(symbols) ? symbols : [symbols];
+
+    var wanted = {};
+
+    for (var i = 0; i < symbols.length; i++) {
+      var canonical = mmDeskCanonicalSymbol(symbols[i]);
+      if (canonical) wanted[canonical] = true;
+    }
+
+    var keys = Object.keys(mids);
+
+    for (var j = 0; j < keys.length; j++) {
+      var keyCanonical = mmDeskCanonicalSymbol(keys[j]);
+      if (!wanted[keyCanonical]) continue;
+
+      var mid = Number(mids[keys[j]]);
+
+      if (isFinite(mid) && mid > 0) {
+        return {
+          key: keys[j],
+          mid: mid,
+        };
+      }
+    }
+
+    return null;
+  }
+
   function mmDeskBookMid(book) {
     if (!book || book._err) return null;
     var bids = Array.isArray(book.bids) ? book.bids : [];
@@ -3311,16 +3341,75 @@ async function bootDesk() {
           throw new Error("Architect bid/ask is unavailable for " + axSymbol + axDetail);
         }
 
-        var refMatch = mmDeskFindBook(liveState.ref_all_books, theoSymbol);
-        if (!refMatch) throw new Error("No " + theoSource + " price is available for Theo Symbol " + theoSymbol + ".");
-        var actualSource = mmDeskReferenceSourceForSymbol(liveState, refMatch.key);
-        if (actualSource && actualSource !== theoSource) {
-          throw new Error("Theo Symbol " + theoSymbol + " is currently populated by " + actualSource + ", not " + theoSource + ".");
+        var selectedLeg = legsByAx[axSymbol.toUpperCase()] || {};
+
+        var referenceSymbol = String(
+          selectedLeg.reference_fix_symbol ||
+          selectedLeg.theo_symbol ||
+          ""
+        ).trim();
+
+        var pricerMid = null;
+        var matchedTheoKey = "";
+
+        // First try the displayed reference-book map. This preserves the
+        // existing behavior for Hyperliquid and any Neon book already present.
+        var refMatch = mmDeskFindBook(
+          liveState.ref_all_books,
+          theoSymbol
+        );
+
+        // Some books use reference_fix_symbol rather than theo_venue_symbol.
+        if (!refMatch && referenceSymbol) {
+          refMatch = mmDeskFindBook(
+            liveState.ref_all_books,
+            referenceSymbol
+          );
         }
-        var pricerMid = mmDeskBookMid(refMatch.book);
+
+        if (refMatch) {
+          var actualSource = mmDeskReferenceSourceForSymbol(
+            liveState,
+            refMatch.key
+          );
+
+          if (actualSource && actualSource !== theoSource) {
+            throw new Error(
+              "Theo Symbol " + theoSymbol +
+              " is currently populated by " + actualSource +
+              ", not " + theoSource + "."
+            );
+          }
+
+          pricerMid = mmDeskBookMid(refMatch.book);
+          matchedTheoKey = refMatch.key;
+        }
+
+        // Neon multi-symbol quotes may exist only in the C++ theo cache,
+        // without a matching ref_all_books entry.
+        if (pricerMid == null && theoSource === "neon_fix") {
+          var cachedTheo = mmDeskFindTheoMid(
+            liveState.theo_mids_by_symbol,
+            [theoSymbol, referenceSymbol]
+          );
+
+          if (cachedTheo) {
+            pricerMid = cachedTheo.mid;
+            matchedTheoKey = cachedTheo.key;
+          }
+        }
+
         if (pricerMid == null) {
-          var refDetail = refMatch.book && refMatch.book._err ? ": " + refMatch.book._err : "";
-          throw new Error("Pricing-feed bid/ask is unavailable for " + theoSymbol + refDetail);
+          var refDetail =
+            refMatch && refMatch.book && refMatch.book._err
+              ? ": " + refMatch.book._err
+              : "";
+
+          throw new Error(
+            "No " + theoSource +
+            " midpoint is available for Theo Symbol " +
+            theoSymbol + refDetail
+          );
         }
 
         quoteSnapshotInput.value = mmDeskSnapshotNumber(axMid);
@@ -3330,7 +3419,13 @@ async function bootDesk() {
         quoteSnapshotInput.dispatchEvent(new Event("change", { bubbles: true }));
         pricerSnapshotInput.dispatchEvent(new Event("change", { bubbles: true }));
         snapshotStatus.style.color = "#86efac";
-        snapshotStatus.textContent = "Filled: AX " + axSymbol + " mid " + quoteSnapshotInput.value + " · " + theoSource + " " + theoSymbol + " mid " + pricerSnapshotInput.value + ". Values remain editable.";
+        snapshotStatus.textContent =
+          "Filled: AX " + axSymbol +
+          " mid " + quoteSnapshotInput.value +
+          " · " + theoSource +
+          " " + (matchedTheoKey || theoSymbol) +
+          " mid " + pricerSnapshotInput.value +
+          ". Values remain editable.";
       } catch (e) {
         snapshotStatus.style.color = "#fca5a5";
         snapshotStatus.textContent = String((e && e.message) || e);
