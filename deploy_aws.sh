@@ -1,12 +1,12 @@
 #!/bin/bash
 #===============================================================================
 # Architect Trading Platform - AWS Linux Production Deployment Script
-# Repository: https://github.com/avinash-singh-mettraders/ArchitechCode
+# Repository: https://github.com/avinash-singh-mettraders/architech
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/avinash-singh-mettraders/ArchitechCode/main/deploy_aws.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avinash-singh-mettraders/architech/main/deploy_aws.sh | bash
 #   OR
-#   wget -qO- https://raw.githubusercontent.com/avinash-singh-mettraders/ArchitechCode/main/deploy_aws.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/avinash-singh-mettraders/architech/main/deploy_aws.sh | bash
 #   OR
 #   ./deploy_aws.sh
 #
@@ -23,7 +23,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_URL="https://github.com/avinash-singh-mettraders/ArchitechCode.git"
+REPO_URL="https://github.com/avinash-singh-mettraders/architech.git"
 INSTALL_DIR="$HOME/platform_core"
 SERVICE_NAME="architect-trading"
 
@@ -251,7 +251,7 @@ create_systemd_service() {
     sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << EOF
 [Unit]
 Description=Architect Trading Platform
-Documentation=https://github.com/avinash-singh-mettraders/ArchitechCode
+Documentation=https://github.com/avinash-singh-mettraders/architech
 After=network-online.target
 Wants=network-online.target
 
