@@ -107,7 +107,7 @@ MM_DESK_AX_BOOK_POLL_SEC = float(
     _AX_LEGACY if _AX_LEGACY is not None else os.environ.get("MM_DESK_AX_BOOK_POLL_SEC", "2"),
 )
 MM_DESK_ACCOUNT_POLL_SEC = float(os.environ.get("MM_DESK_ACCOUNT_POLL_SEC", "5"))
-MM_DESK_REF_MAX_SYMBOLS = int(os.environ.get("MM_DESK_REF_MAX_SYMBOLS", "12"))
+MM_DESK_REF_MAX_SYMBOLS = int(os.environ.get("MM_DESK_REF_MAX_SYMBOLS", "48"))
 # Shallow books per symbol: GET /instruments (list) + GET /book (auth). Disable: MM_DESK_AX_ALL_BOOKS=0
 AX_ALL_BOOK_DEPTH = int(os.environ.get("MM_DESK_AX_GRID_DEPTH", str(BOOK_DEPTH)))
 AX_MAX_SYMBOLS_ALL = int(os.environ.get("MM_DESK_AX_MAX_SYMBOLS", "48"))
@@ -6288,6 +6288,53 @@ def desk_mm_stack_pair_place_on_gateway_then_tell_cpp(
                 "error": f"symbol {sym!r} is not in market_maker.instruments — edit default_config.json or fix config",
             }
     tick, ostep = _leg_tick_and_ostep_for_ax_st(st, sym)
+    # === TICK-SOURCE GUARD + ONE-SHOT AUTO-HEAL (2026-07-30) ==============================
+    # The quote tick comes ONLY from the gateway /instruments map. If that fetch was lost (e.g. a
+    # TLS handshake timeout at feed start) `tick` is 0.0 — and finalize_mm_pair_on_tick_grid then
+    # PASSES THE RAW PRICE THROUGH UNROUNDED, so every leg is fired at a non-grid price and the
+    # venue rejects it 400 ("must be a multiple of <tick>") after a full, slow round trip. That is
+    # the "20s to submit → HTTP 400" the desk saw on XAG-PERP. The sibling place path already
+    # guards this (see desk_place_manual_mm_pair); this path did not.
+    #
+    # Fix: if the tick is missing, do ONE lightweight on-demand /instruments refresh (no config
+    # write / no desk reload — just repopulate st.ax_tick_by_symbol) and re-read. If it now
+    # resolves, place normally (self-heals a transient tick loss). If it still cannot, REFUSE
+    # immediately with an actionable error instead of firing orders we KNOW the venue will reject.
+    if tick <= 0 or not math.isfinite(tick):
+        with st.lock:
+            _rb = str(st.rest_endpoint or "").strip().rstrip("/")
+        if _rb:
+            tick_map, tm_err = fetch_ax_instrument_tick_map(_rb)
+            if tick_map:
+                with st.lock:
+                    merged_tm = dict(st.ax_tick_by_symbol or {})
+                    merged_tm.update(tick_map)
+                    st.ax_tick_by_symbol = merged_tm
+                    st.ax_tick_map_error = ""
+                    st.ax_tick_map_updated_ms = int(time.time() * 1000)
+                _merge_gateway_ticks_into_st_mm_instruments(st, tick_map)
+                desk_log(
+                    st,
+                    f"{log_context}: gateway tick for {sym!r} was missing — on-demand /instruments "
+                    f"refresh loaded {len(tick_map)} symbol tick(s)",
+                )
+            else:
+                desk_log(
+                    st,
+                    f"{log_context}: gateway tick for {sym!r} missing and on-demand /instruments "
+                    f"refresh failed: {tm_err or 'no positive tick_size'}",
+                )
+        tick, ostep = _leg_tick_and_ostep_for_ax_st(st, sym)
+    if tick <= 0 or not math.isfinite(tick):
+        return {
+            "ok": False,
+            "error": (
+                f"no gateway tick_size for {sym!r} — placement refused because the price cannot be "
+                f"rounded to the venue grid (an unrounded price is always rejected HTTP 400). Retry "
+                f"once GET /instruments loads the tick (feed start or POST /api/desk/sync_instrument_ticks)."
+            ),
+            "ax_symbol": sym,
+        }
     if adjust_position <= 0:
         adjust_position = 1
     if adjust_ticks <= 0:
@@ -7419,6 +7466,79 @@ def _wait_engine_observed_hold(
         time.sleep(_INSTR_HOLD_ACK_POLL_SEC)
 
 
+def _desk_instrument_remove_orders_json_stacks(merged_cfg: dict, ax_symbol: str) -> dict:
+    """Remove every ``orders.json`` stack for *ax_symbol* (root + ``products`` views).
+
+    ROOT-CAUSE FIX for the reprice-doubling reported after a per-instrument cancel + template
+    re-add (2 orders -> reprice -> 6 -> reprice -> 10 ...). A cancelled stack that stays in
+    ``orders.json`` still carries its now-dead seed ``bid_exchange_oid`` / ``ask_exchange_oid``.
+    On every ~1 Hz reconcile the engine tries to re-adopt those stale OIDs (see
+    ``reconcile refresh+adopt`` + ``gateway-seed adopt`` in ``MakeMarketStrategy``) while
+    ``theo_move`` independently places a fresh pair — so each cycle leaves another un-cancelled
+    pair on the book. Dropping the stack from the desired-state file stops the re-adopt loop at
+    the source; the engine's mass-teardown guardrail then tears down exactly those stacks (after
+    one confirming read) and never touches siblings.
+
+    Scoped + safe:
+      * Only stacks whose AX matches *ax_symbol* are removed — siblings on OTHER instruments
+        (e.g. gold while cancelling silver) are preserved. Never a global clear.
+      * Runs under ``_MM_ORDERS_CONFIG_LOCK`` so the desk-side read-modify-write window is closed
+        against a racing desk writer.
+      * ``allow_shrink=True`` authorises the removal past the mass-shrink guard (an intentional
+        per-instrument teardown). It deliberately does NOT stamp ``intent=remove_all`` — that is
+        reserved for a whole-file clear; a partial removal lets the C++ guardrail confirm-then-
+        teardown just the removed stacks instead of an immediate mass wipe.
+
+    Returns ``{"removed": <rows>, "stacks": [<stack_id>...], "ok": bool, "error": str}``.
+    Removing nothing (no stacks configured for this AX) is a success, not an error.
+    """
+    ax_norm = _norm_orders_ax(ax_symbol)
+    out: dict = {"removed": 0, "stacks": [], "ok": True, "error": ""}
+    if not ax_norm:
+        out["ok"] = False
+        out["error"] = "ax_symbol required"
+        return out
+    with _MM_ORDERS_CONFIG_LOCK:
+        doc = load_mm_orders_config(merged_cfg)
+        sids: list[str] = []
+        seen: set[str] = set()
+
+        def _add(sid_raw: object) -> None:
+            sid = str(sid_raw or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                sids.append(sid)
+
+        root = doc.get("stacks")
+        if isinstance(root, list):
+            for r in root:
+                if isinstance(r, dict) and _norm_orders_ax(str(r.get("ax_symbol") or "")) == ax_norm:
+                    _add(r.get("stack_id") or r.get("id"))
+        products = doc.get("products") if isinstance(doc.get("products"), dict) else {}
+        pk = _orders_json_resolve_product_key(products, ax_norm)
+        if pk:
+            prod = products.get(pk)
+            if isinstance(prod, dict):
+                # products[pk] rows belong to this AX (keyed by product); collect by stack_id
+                # even when a row omits its own ax_symbol.
+                for s in (prod.get("stacks") or []):
+                    if isinstance(s, dict):
+                        _add(s.get("stack_id") or s.get("id"))
+
+        if not sids:
+            return out  # nothing configured for this AX — a clean no-op, not a failure
+
+        removed = 0
+        for sid in sids:
+            removed += _orders_json_remove_stack_id_everywhere(doc, sid, ax_hint=ax_norm)
+        out["removed"] = removed
+        out["stacks"] = list(sids)
+        ok_w, err_w = save_mm_orders_config(merged_cfg, doc, allow_shrink=True)
+        out["ok"] = bool(ok_w)
+        out["error"] = err_w
+    return out
+
+
 def desk_instrument_cancel_all(st: DeskSharedState, ax_symbol: str, *, hold: bool = True) -> dict:
     """Per-instrument cancel-all + HOLD. Implements the D5 sequence exactly and returns a
     structured per-step report for the UI. Never reports success on an unverified state.
@@ -7481,6 +7601,23 @@ def desk_instrument_cancel_all(st: DeskSharedState, ax_symbol: str, *, hold: boo
     # If not observed within the window we still proceed — the hold IS written and the
     # verify loop is the ultimate proof — but the report flags it so the UI can warn.
 
+     # STEP 2.5 — drop this instrument's stacks from the desired-state file (orders.json).
+    # ROOT-CAUSE FIX for reprice-doubling: a cancelled stack left in orders.json keeps its dead
+    # seed OIDs, which the engine re-adopts every reconcile while theo_move places a fresh pair
+    # (2 -> 6 -> 10 ...). Removing the stacks stops that re-adopt loop; siblings (e.g. gold while
+    # cancelling silver) are untouched. Safe to run here because placement is already suppressed
+    # (hold observed above), so it cannot race a new place — and the venue sweep below still
+    # clears any live orders regardless of this step's outcome. Non-fatal: a removal failure is
+    # reported but does not abort the cancel (the instrument is left HELD either way).
+    rm = _desk_instrument_remove_orders_json_stacks(merged_cfg, ax_norm)
+    steps.append({
+        "step": "remove_orders_json_stacks",
+        "ok": bool(rm.get("ok")),
+        "removed": rm.get("removed", 0),
+        "stacks": rm.get("stacks", []),
+        "detail": rm.get("error") or "",
+    })
+
     # STEPS 3-5 — cancel + verify + bounded retry.
     residual: list[str] = []
     clean = False
@@ -7516,6 +7653,8 @@ def desk_instrument_cancel_all(st: DeskSharedState, ax_symbol: str, *, hold: boo
         "attempts": attempts,
         "residual_open": len(residual),
         "residual_oids": residual[:50],
+        "orders_json_stacks_removed": rm.get("removed", 0),
+        "orders_json_remove_ok": bool(rm.get("ok")),
         "steps": steps,
     }
     if not clean:
@@ -7526,7 +7665,9 @@ def desk_instrument_cancel_all(st: DeskSharedState, ax_symbol: str, *, hold: boo
     desk_log(
         st,
         f"INSTRUMENT_CANCEL_ALL ax={ax_norm} pre_live_open={pre_live} observed={observed} "
-        f"attempts={attempts} clean={clean} residual={len(residual)} held=True",
+        f"attempts={attempts} clean={clean} residual={len(residual)} "
+        f"orders_json_stacks_removed={rm.get('removed', 0)} orders_json_remove_ok={rm.get('ok')} "
+        f"held=True",
     )
     return result
 
@@ -10138,11 +10279,11 @@ __REF_DEPTH_COL_BLOCK__
 <div class="fld"><label>Reload limit reset nonce</label><div class="desk-ro-val" id="mmReloadNonce"></div></div>
 <button type="button" class="btn" id="btnMmReloadBump" style="width:100%;margin-top:4px" title="Writes new reload_limit_reset_nonce; C++ can clear reload halt">Clear reload halt (new nonce)</button>
 </details>
-<div class="mm-feed-control">
-<p class="mmc-title">MM placement</p>
-<p class="mmc-sub"><code>mm_orders_enabled</code> (config) · <code>mm_move_*</code> (<code>orders.json</code>)</p>
-<button type="button" class="btn btn-mm-orders-pause" id="btnMmOrdersGate" title="Pause/resume theo-driven MM moves per stack via orders.json (POST /api/desk/orders_mm_move). Config master: POST /api/desk/mm_gate.">Pause/Resume MM placement</button>
-</div>
+<!-- MM placement panel (title "MM placement" / button "Pause/Resume MM placement") removed from the
+     GUI on request 2026-07-30. The wiring is intentionally LEFT INTACT: paintMmGateButtons(),
+     postMmGate(), the #btnMmOrdersGate onclick, and the orders.json mm_move panel
+     (mmDeskOpenOrdersMmMovePanel) all remain and no-op safely because their getElementById lookups
+     are null-guarded. Re-add the <div class="mm-feed-control"> block with #btnMmOrdersGate to restore. -->
 <div class="mm-feed-control" id="instrHoldPanel">
 <p class="mmc-title">Cancel all &amp; stop instrument</p>
 <p class="mmc-sub">Cancels every open order on one instrument (account-wide, incl. hand-placed) and stops it quoting.</p>
