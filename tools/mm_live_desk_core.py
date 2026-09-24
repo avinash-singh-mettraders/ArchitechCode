@@ -1480,7 +1480,9 @@ def _hyperliquid_symbol_candidates(raw_symbol: str) -> list[str]:
         "META": ("xyz:META", "META"),
         "MSFT": ("xyz:MSFT", "MSFT"),
         "ASML": ("xyz:ASML", "ASML"),
-        "AVGO": ("xyz:AVGO", "AVGO")
+        "AVGO": ("xyz:AVGO", "AVGO"),
+        "SKHY": ("xyz:SKHY", "SKHY"),
+        "ARM": ("xyz:ARM", "ARM")
     }
     if canonical in aliases:
         # Authoritative alias list — do NOT add the raw `SPX`/`GOLD`/... fallback
