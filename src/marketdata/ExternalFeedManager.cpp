@@ -20,6 +20,9 @@
 #include <optional>
 #include <unordered_map>
 
+#include <cmath>
+#include <utility>
+
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -1048,14 +1051,46 @@ void ExternalFeedManager::mettradersFeedLoop() {
     // ("GOLD" by default). Multiple FX/metal/index feeds on this venue would
     // each need a separate WS thread (or a multiplexed stream that includes
     // the symbol on the wire), but the current operational use is gold-only.
-    const std::string fix_sym = cfg.getMettradersFeedFixSymbol();
-    if (fix_sym.empty()) {
+
+    struct InstrumentRoute {
+        std::string fix_symbol;
+    };
+
+    std::unordered_map<std::string, InstrumentRoute> routes;
+
+    try {
+        const json instruments = cfg.getSection("mettraders_feed.instruments");
+        if (!instruments.is_object() || instruments.empty()) {
+            throw std::runtime_error(
+                "mettraders_feed.instruments must be a non-empty object");
+        }
+
+        for (auto it = instruments.begin(); it != instruments.end(); ++it) {
+            const auto& entry = it.value();
+
+            InstrumentRoute route{
+                entry.value("fix_symbol", it.key())
+            };
+
+            if (it.key().empty() || route.fix_symbol.empty()) {
+                throw std::runtime_error(
+                    "Invalid Mettraders instrument mapping: " + it.key());
+            }
+
+            routes.emplace(it.key(), std::move(route));
+        }
+    } catch (const std::exception& ex) {
         mettraders_up_.store(false);
         mettraders_ws_connected_.store(false);
-        std::lock_guard<std::mutex> lock(feed_err_mu_);
-        mettraders_last_err_ = "mettraders_feed.fix_symbol is empty — set the product tag (e.g. \"GOLD\")";
+
+        {
+            std::lock_guard<std::mutex> lock(feed_err_mu_);
+            mettraders_last_err_ = ex.what();
+        }
+
         if (utils::Logger::isInitialized()) {
-            utils::Logger::getInstance().warn("[FEED:Mettraders] {}", mettraders_last_err_);
+            utils::Logger::getInstance().warn(
+                "[FEED:Mettraders] configuration error: {}", ex.what());
         }
         return;
     }
@@ -1084,7 +1119,7 @@ void ExternalFeedManager::mettradersFeedLoop() {
         return ctx;
     });
 
-    ws.set_open_handler([this, &conn_hdl, &conn_open, url, fix_sym](websocketpp::connection_hdl hdl) {
+    ws.set_open_handler([this, &conn_hdl, &conn_open, url](websocketpp::connection_hdl hdl) {
         conn_hdl = hdl;
         conn_open.store(true);
         // Transport up — but do NOT flip `mettraders_up_` here. Public health
@@ -1099,98 +1134,116 @@ void ExternalFeedManager::mettradersFeedLoop() {
         }
         if (!mettraders_sanity_logged_.exchange(true) && utils::Logger::isInitialized()) {
             utils::Logger::getInstance().info(
-                "[FEED_SANITY:Mettraders] websocket handshake ok url={} fix_symbol={}",
-                url,
-                fix_sym);
+                "[FEED_SANITY:Mettraders] websocket handshake ok url={}",
+                url);
         }
     });
 
-    ws.set_message_handler([this, fix_sym](websocketpp::connection_hdl,
-                                           MettradersWsClient::message_ptr msg) {
+    ws.set_message_handler(
+    [this, routes](websocketpp::connection_hdl,
+                   MettradersWsClient::message_ptr msg) {
         if (!msg) return;
-        const std::string payload = msg->get_payload();
+
         const int idx = mettraders_raw_msgs_logged_.fetch_add(1);
-        // Best-effort JSON parse of the Mettraders wire format. The stream
-        // currently sends one bid/ask tick per message:
-        //     {"ts":1778600032265,"bid":4668.3,"ask":4668.6}
-        // We don't ack/heartbeat back — the connection stays open as long as
-        // the client polls. Any malformed payload is dropped silently after
-        // the first-few-messages diagnostic logs.
-        double bid = 0.0, ask = 0.0;
-        bool parsed = false;
-        std::string parse_err;
+        ExternalFeedQuote q;
+
         try {
-            json j = json::parse(payload);
-            if (j.is_object() && j.contains("bid") && j.contains("ask")) {
-                auto read_num = [](const json& v) -> double {
-                    if (v.is_number()) return v.get<double>();
-                    if (v.is_string()) return std::stod(v.get<std::string>());
-                    return 0.0;
-                };
-                bid = read_num(j["bid"]);
-                ask = read_num(j["ask"]);
-                if (std::isfinite(bid) && std::isfinite(ask) && bid > 0.0 && ask > 0.0 && ask >= bid) {
-                    parsed = true;
+            const json j = json::parse(msg->get_payload());
+
+            if (!j.is_object()) {
+                throw std::runtime_error("Expected a JSON quote object");
+            }
+
+            // Ignore subscription acknowledgements and other control messages.
+            if (!j.contains("instrumentId") ||
+                !j.at("instrumentId").is_string() ||
+                !j.contains("bid") || !j.contains("ask")) {
+                throw std::runtime_error(
+                    "Quote requires string instrumentId and bid/ask fields");
+            }
+
+            const std::string id = j.at("instrumentId").get<std::string>();
+            const auto route_it = routes.find(id);
+
+            // Never route an unknown ID to GOLD or another instrument.
+            if (route_it == routes.end()) return;
+
+            const auto read_num = [](const json& value) -> double {
+                if (value.is_number()) return value.get<double>();
+
+                if (value.is_string()) {
+                    const auto text = value.get<std::string>();
+                    std::size_t consumed = 0;
+                    const double number = std::stod(text, &consumed);
+                    if (consumed == text.size()) return number;
                 }
-            } else {
-                parse_err = "missing bid/ask fields";
+
+                throw std::runtime_error("Invalid numeric quote field");
+            };
+
+            const auto& route = route_it->second;
+
+            if (!j.contains("displayFactor")) {
+                throw std::runtime_error(
+                    "Missing displayFactor for instrumentId=" + id);
             }
+
+            const double display_factor = read_num(j.at("displayFactor"));
+
+            if (!std::isfinite(display_factor) || display_factor <= 0.0) {
+                throw std::runtime_error(
+                    "Invalid displayFactor for instrumentId=" + id);
+            }
+
+            // Convert wire prices into displayed price units exactly once.
+            q.bid = read_num(j.at("bid")) * display_factor;
+            q.ask = read_num(j.at("ask")) * display_factor;
+
+            if (!std::isfinite(q.bid) || !std::isfinite(q.ask) ||
+                q.bid <= 0.0 || q.ask <= 0.0 || q.ask < q.bid) {
+                throw std::runtime_error("Invalid or crossed bid/ask");
+            }
+
+            // Derive midpoint from the validated two-sided quote.
+            q.mid = q.bid + (q.ask - q.bid) / 2.0;
+            q.updated_at = std::chrono::steady_clock::now();
+            q.valid = true;
+            q.fix_symbol = route.fix_symbol;
         } catch (const std::exception& ex) {
-            parse_err = ex.what();
-        }
+            if (idx < 5 || (idx & 0xFF) == 0) {
+                {
+                    std::lock_guard<std::mutex> lock(feed_err_mu_);
+                    mettraders_last_err_ =
+                        std::string("parse_failed: ") + ex.what();
+                }
 
-        // Throttled raw logging: keep the first 5 messages so the operator
-        // can verify the schema on a new venue. After parsing is wired,
-        // these logs always carry the parse result alongside the raw bytes.
-        if (idx < 5 && utils::Logger::isInitialized()) {
-            std::string truncated = payload;
-            if (truncated.size() > 1000) {
-                truncated.resize(1000);
-                truncated += "...";
-            }
-            if (parsed) {
-                utils::Logger::getInstance().info(
-                    "[METTRADERS_FEED] raw msg #{} parsed bid={} ask={} for fix_symbol={} payload={}",
-                    idx, bid, ask, fix_sym, truncated);
-            } else {
-                utils::Logger::getInstance().warn(
-                    "[METTRADERS_FEED] raw msg #{} parse_failed err=\"{}\" payload={}",
-                    idx, parse_err, truncated);
-            }
-        }
-
-        if (!parsed) {
-            // Only update parse-side error every ~16 failures so a permanently
-            // unparseable stream doesn't spam the err mutex.
-            if ((idx & 0xF) == 0) {
-                std::lock_guard<std::mutex> lock(feed_err_mu_);
-                mettraders_last_err_ = std::string("parse_failed: ") +
-                                       (parse_err.empty() ? "missing fields" : parse_err);
+                if (utils::Logger::isInitialized()) {
+                    utils::Logger::getInstance().warn(
+                        "[METTRADERS_FEED] rejected message: {}", ex.what());
+                }
             }
             return;
         }
 
-        ExternalFeedQuote q;
-        q.bid = bid;
-        q.ask = ask;
-        q.mid = (bid + ask) / 2.0;
-        q.updated_at = std::chrono::steady_clock::now();
-        q.valid = true;
-        q.fix_symbol = fix_sym;
-        publishQuote(q);
+        const auto now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
 
-        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
         last_mettraders_ok_ms_.store(now_ms);
         const bool was_up = mettraders_up_.exchange(true);
-        if (!was_up) {
+
+        {
             std::lock_guard<std::mutex> lock(feed_err_mu_);
             mettraders_last_err_.clear();
-            if (utils::Logger::isInitialized()) {
-                utils::Logger::getInstance().info(
-                    "[FEED_SANITY:Mettraders] first parsed quote fix_symbol={} bid={} ask={} mid={}",
-                    fix_sym, bid, ask, q.mid);
-            }
+        }
+
+        // Existing storage and callbacks route this by q.fix_symbol.
+        publishQuote(q);
+
+        if ((!was_up || idx < 5) && utils::Logger::isInitialized()) {
+            utils::Logger::getInstance().info(
+                "[METTRADERS_FEED] symbol={} bid={} ask={} mid={}",
+                q.fix_symbol, q.bid, q.ask, q.mid);
         }
     });
 
